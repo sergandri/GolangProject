@@ -1,2 +1,5 @@
+# Ignore IDEA files
+.idea/
+
+# Ignore .env file
 .env
-.idea

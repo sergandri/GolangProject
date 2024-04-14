@@ -19,20 +19,17 @@ import (
 var logger = logrus.New()
 
 func init() {
-	// Настройка формата логов
 	logger.Formatter = &logrus.JSONFormatter{}
-	// Установка минимального уровня логирования
 	logger.Level = logrus.InfoLevel
-	// Установка выходного потока
 	logger.Out = os.Stdout
 }
 
 type Transaction struct {
-	ID          string    `json:"id"`
+	ID          int       `json:"id"`
 	UserID      int       `json:"user_id"`
 	Amount      float64   `json:"amount"`
 	Currency    string    `json:"currency"`
-	Type        string    `json:"type"` // income, expense, transfer
+	Type        string    `json:"type"`
 	Category    string    `json:"category"`
 	Date        time.Time `json:"date"`
 	Description string    `json:"description"`
@@ -47,8 +44,7 @@ var db *pgxpool.Pool
 
 func main() {
 	var err error
-	databaseUrl := os.Getenv("DATABASE_URL")
-	db, err = setupDatabase(databaseUrl)
+	db, err = setupDatabase()
 	if err != nil {
 		logger.Fatalf("Failed to setup database: %v", err)
 	}
@@ -83,7 +79,6 @@ func getAllTransactions(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool
 		return
 	}
 
-	// Проверка, что userID является числом
 	if _, err := strconv.Atoi(userID); err != nil {
 		http.Error(w, "User ID must be an integer", http.StatusBadRequest)
 		return
@@ -122,24 +117,21 @@ func createTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверка наличия пользователя
 	var userID int
-	err := db.QueryRow(context.Background(), "SELECT id FROM users WHERE id = $1", t.UserID).Scan(&userID)
+	err := db.QueryRow(context.Background(), "SELECT id FROM transactionsdb.public.users WHERE id = $1", t.UserID).Scan(&userID)
 	if err != nil {
-		// Пользователь не найден, создаем нового пользователя
 		username := "Default User"                           // Примерное имя, можно передавать в запросе или генерировать
 		email := fmt.Sprintf("user%d@example.com", t.UserID) // Примерная почта, можно улучшить логику
 		password := "example_password"                       // Пример пароля, в реальных условиях нужно хеширование
 
-		_, err := db.Exec(context.Background(), "INSERT INTO users (name, email, password) VALUES ($1, $2, $3)", username, email, password)
+		_, err := db.Exec(context.Background(), "INSERT INTO transactionsdb.public.users (name, email, password) VALUES ($1, $2, $3)", username, email, password)
 		if err != nil {
 			http.Error(w, "Failed to create user", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// Создание транзакции
-	sql := `INSERT INTO transactions (user_id, amount, currency, type, category, date, description)
+	sql := `INSERT INTO transactionsdb.public.transactions (user_id, amount, currency, type, category, date, description)
             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`
 	id := 0
 	err = db.QueryRow(context.Background(), sql, t.UserID, t.Amount, t.Currency, t.Type, t.Category, t.Date, t.Description).Scan(&id)
@@ -151,8 +143,6 @@ func createTransaction(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]int{"id": id})
 }
 
-// Это простой способ сгенерировать уникальный ID для наших целей.
-// В продакшене вы захотите использовать более надежный метод генерации уникальных ID.
 func generateTransactionID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
@@ -166,11 +156,11 @@ func handleTransactionByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "GET":
-		getTransactionByID(w, r, id) // Правильный вызов
+		getTransactionByID(w, r, id)
 	case "PUT":
-		updateTransaction(w, r, id) // Правильный вызов
+		updateTransaction(w, r, id)
 	case "DELETE":
-		deleteTransaction(w, r, id) // Правильный вызов
+		deleteTransaction(w, r, id)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -178,11 +168,15 @@ func handleTransactionByID(w http.ResponseWriter, r *http.Request) {
 
 func getTransactionByID(w http.ResponseWriter, r *http.Request, id string) {
 	var t Transaction
-	err := db.QueryRow(context.Background(), "SELECT * FROM transactions WHERE id=$1", id).Scan(&t.ID, &t.UserID, &t.Amount, &t.Currency, &t.Type, &t.Category, &t.Date, &t.Description)
+	query := "SELECT * FROM transactionsdb.public.transactions WHERE id=$1"
+	logger.Infof("Executing query: %s", query)
+	err := db.QueryRow(context.Background(), query, id).Scan(&t.ID, &t.UserID, &t.Amount, &t.Currency, &t.Type, &t.Category, &t.Date, &t.Description)
 	if err != nil {
+		logger.Errorf("Error fetching transaction: %v", err)
 		http.Error(w, "Transaction not found", http.StatusNotFound)
 		return
 	}
+	logger.Infof("Transaction found: %+v", t)
 	json.NewEncoder(w).Encode(t)
 }
 
@@ -193,7 +187,7 @@ func updateTransaction(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 
-	sql := `UPDATE transactions SET amount=$1, currency=$2, type=$3, category=$4, date=$5, description=$6 WHERE id=$7`
+	sql := `UPDATE transactionsdb.public.transactions SET amount=$1, currency=$2, type=$3, category=$4, date=$5, description=$6 WHERE id=$7`
 	_, err := db.Exec(context.Background(), sql, t.Amount, t.Currency, t.Type, t.Category, t.Date, t.Description, id)
 	if err != nil {
 		http.Error(w, "Failed to update transaction", http.StatusInternalServerError)
@@ -203,7 +197,7 @@ func updateTransaction(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func deleteTransaction(w http.ResponseWriter, r *http.Request, id string) {
-	_, err := db.Exec(context.Background(), "DELETE FROM transactions WHERE id=$1", id)
+	_, err := db.Exec(context.Background(), "DELETE FROM transactionsdb.public.transactions WHERE id=$1", id)
 	if err != nil {
 		http.Error(w, "Failed to delete transaction", http.StatusInternalServerError)
 		return

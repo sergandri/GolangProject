@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -35,11 +34,6 @@ type Transaction struct {
 	Description string    `json:"description"`
 }
 
-var (
-	transactions = make(map[string]Transaction)
-	mutex        = &sync.Mutex{}
-)
-
 var db *pgxpool.Pool
 
 func main() {
@@ -52,13 +46,14 @@ func main() {
 
 	http.HandleFunc("/transactions", handleTransactions)
 	http.HandleFunc("/transactions/", handleTransactionByID)
+	http.HandleFunc("/commissions/calculate", handleCommissionCalculation)
 
 	if err := createTables(db); err != nil {
 		log.Fatalf("failed to create tables: %v", err)
 	}
 
 	logger.Println("Server starting on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	logger.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func handleTransactions(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +79,7 @@ func getAllTransactions(w http.ResponseWriter, r *http.Request, db *pgxpool.Pool
 		return
 	}
 
-	rows, err := db.Query(context.Background(), "SELECT id, user_id, amount, currency, type, category, date, description FROM transactions WHERE user_id=$1", userID)
+	rows, err := db.Query(context.Background(), "SELECT id, user_id, amount, currency, type, category, date, description FROM transactionsdb.public.transactions WHERE user_id=$1", userID)
 	if err != nil {
 		logger.Errorf("Error querying database: %v", err)
 		http.Error(w, "Database query error", http.StatusInternalServerError)
@@ -167,17 +162,51 @@ func handleTransactionByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func getTransactionByID(w http.ResponseWriter, r *http.Request, id string) {
+	targetCurrency := r.URL.Query().Get("currency")
+
 	var t Transaction
-	query := "SELECT * FROM transactionsdb.public.transactions WHERE id=$1"
-	logger.Infof("Executing query: %s", query)
+	query := "SELECT id, user_id, amount, currency, type, category, date, description FROM transactionsdb.public.transactions WHERE id=$1"
 	err := db.QueryRow(context.Background(), query, id).Scan(&t.ID, &t.UserID, &t.Amount, &t.Currency, &t.Type, &t.Category, &t.Date, &t.Description)
 	if err != nil {
-		logger.Errorf("Error fetching transaction: %v", err)
 		http.Error(w, "Transaction not found", http.StatusNotFound)
 		return
 	}
-	logger.Infof("Transaction found: %+v", t)
-	json.NewEncoder(w).Encode(t)
+
+	responseData := map[string]interface{}{
+		"id":          t.ID,
+		"amount":      t.Amount,
+		"currency":    t.Currency,
+		"type":        t.Type,
+		"category":    t.Category,
+		"date":        t.Date,
+		"description": t.Description,
+	}
+
+	// Perform currency conversion if a target currency is specified and it is different from the transaction currency
+	if targetCurrency != "" && targetCurrency != t.Currency {
+		// Retrieve the API key from the environment variable
+		apiKey := os.Getenv("FREECURRENCYAPI_KEY")
+		if apiKey == "" {
+			http.Error(w, "API key not set in environment variables", http.StatusInternalServerError)
+			return
+		}
+
+		// Make a request to the currency conversion API
+		conversionRate, err := getConversionRate(t.Currency, targetCurrency, apiKey)
+		if err != nil {
+			http.Error(w, "Failed to convert currency", http.StatusInternalServerError)
+			return
+		}
+
+		// Convert the amount
+		convertedAmount := t.Amount * conversionRate
+		responseData["convertedAmount"] = convertedAmount
+		responseData["convertedCurrency"] = targetCurrency
+		responseData["rate"] = conversionRate
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(responseData)
 }
 
 func updateTransaction(w http.ResponseWriter, r *http.Request, id string) {

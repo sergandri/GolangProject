@@ -11,26 +11,27 @@ import (
 
 // Функция инициализации базы данных
 func setupDatabase() (*pgxpool.Pool, error) {
-	// Загрузка переменных окружения из файла .env
 	err := godotenv.Load()
 	if err != nil {
+		logger.WithError(err).Error("Failed to load .env file")
 		return nil, fmt.Errorf("failed to load .env file: %v", err)
 	}
 
-	// Получение URL базы данных из переменных окружения
 	dbURL := os.Getenv("DATABASE_URL")
-
 	ctx := context.Background()
 	dbpool, err := pgxpool.Connect(ctx, dbURL)
 	if err != nil {
+		logger.WithError(err).Error("Unable to connect to database")
 		return nil, fmt.Errorf("unable to connect to database: %v", err)
 	}
 
 	err = createTables(dbpool)
 	if err != nil {
+		logger.WithError(err).Error("Failed to create tables")
 		return nil, err
 	}
 
+	logger.Info("Database setup completed successfully")
 	return dbpool, nil
 }
 
@@ -55,11 +56,22 @@ func createTables(db *pgxpool.Pool) error {
         description TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id)
     );
+	CREATE TABLE IF NOT EXISTS commissions (
+    id SERIAL PRIMARY KEY,
+    transaction_id INTEGER NOT NULL,
+    amount DECIMAL(10, 2) NOT NULL,
+    currency VARCHAR(3) NOT NULL,
+    date TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    description TEXT,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id)
+);
     `
 	_, err := db.Exec(ctx, createTablesSQL)
 	if err != nil {
+		logger.WithError(err).Error("Failed to create tables")
 		return fmt.Errorf("failed to create tables: %v", err)
 	}
 
+	logger.Info("Tables created successfully")
 	return nil
 }

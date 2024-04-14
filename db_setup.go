@@ -3,13 +3,25 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/joho/godotenv"
 )
 
 // Функция инициализации базы данных
-func setupDatabase(url string) (*pgxpool.Pool, error) {
+func setupDatabase() (*pgxpool.Pool, error) {
+	// Загрузка переменных окружения из файла .env
+	err := godotenv.Load()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load .env file: %v", err)
+	}
+
+	// Получение URL базы данных из переменных окружения
+	dbURL := os.Getenv("DATABASE_URL")
+
 	ctx := context.Background()
-	dbpool, err := pgxpool.Connect(ctx, url)
+	dbpool, err := pgxpool.Connect(ctx, dbURL)
 	if err != nil {
 		return nil, fmt.Errorf("unable to connect to database: %v", err)
 	}
